@@ -1,9 +1,15 @@
 znak f = 'a'
 naj str = "012345\n"
+cif[] arr = [0, 1, 2, 3, 4, 5]
+cif sum = 0
+
 sicke(cif i = 0, i < 6, i++){
     hutor(str)
     znak f = str[i]
     str[i] = 's'
     hutor(f)
     hutor('\n')
+    sum = sum + arr[i]
 }
+
+vychod(sum)

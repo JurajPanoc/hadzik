@@ -57,7 +57,6 @@ get_type_size: dict[token_type, int] = {
     tt.BOOL_DEF: 1,
     tt.CHAR_DEF: 1,
     tt.INT_DEF: 4,
-    tt.STR_DEF: 6
 }
 
 class Generator(ErrorHandler):
@@ -180,7 +179,7 @@ class Generator(ErrorHandler):
             )
         
         if ErrorHandler.debug_mode:
-            print("push", self.stack_size, self.stack_item_sizes, self.stack_padding, self.variables)
+            print(f"---------- PUSH -----------\n{self.stack_size=}\n{self.stack_item_sizes=}\n{self.stack_padding=}\n{self.variables}\n")
 
     def pop_stack(self, dest_reg: str):
         """
@@ -193,7 +192,7 @@ class Generator(ErrorHandler):
         self.stack_size -= sum(size + padding)
         
         if ErrorHandler.debug_mode:
-            print("pop", self.stack_size, self.stack_item_sizes, self.stack_padding, self.variables)
+            print(f"---------- POP -----------\n{self.stack_size=}\n{self.stack_item_sizes=}\n{self.stack_padding=}\n{self.variables}\n")
     
     def push_stack_chunk(self, src: list[str], sizes_w: list[size_words], sizes_b: list[size_bytes], ignore_padding: bool = True):
         """
@@ -216,7 +215,7 @@ class Generator(ErrorHandler):
         self.stack_item_sizes.append(sizes_b)
         self.stack_padding.append(padding)
         if ErrorHandler.debug_mode:
-            print("push chunk", self.stack_size, self.stack_item_sizes, self.variables)
+            print(f"---------- PUSH CHUNK -----------\n{self.stack_size=}\n{self.stack_item_sizes=}\n{self.stack_padding=}\n{self.variables}\n")
 
     def get_reg(self, idx: int) -> str:
         """
@@ -307,6 +306,8 @@ class Generator(ErrorHandler):
         if term.index is not None:
             self.output.append("    ; --- indexing ---\n")
             old_stack_size = self.stack_size # solves the incorrect reads
+            #TODO: has to know the size of an element since the reference only knows the size of pointer and length
+            assert len(self.stack_item_sizes[-2]) > 1, "if its indexed it has to be an array or a string"
             item_size_b = self.stack_item_sizes[-2][0] # minus two because -1 is the index
             item_size_w = byte_to_word[item_size_b]
             LEN_SIZE = 4
@@ -317,8 +318,8 @@ class Generator(ErrorHandler):
             self.output.append(f"    xor rbx, rbx\n")
             self.pop_stack(rb)
 
-            self.gen_term(NodeTerm(term.var))
-            self.output.append(f"    mov rax, [rbp - {self.stack_size - LEN_SIZE}]\n") # reads the pointer to the string
+            self.gen_term(NodeTerm(term.var)) # removes the index so it doesn't recursively call itself multiple times
+            self.output.append(f"    mov rax, [rbp - {self.stack_size - LEN_SIZE}]\n") # reads the pointer to the array or string
             
             self.stack_size = old_stack_size
             self.stack_item_sizes.pop()
@@ -336,13 +337,14 @@ class Generator(ErrorHandler):
             found_vars: tuple[VariableContext, ...] = tuple(filter(lambda x: x.name == term.var.ident.value, self.variables)) # type: ignore (says types are unknown even though they are known)
             if not found_vars:
                 self.compiler_error("Value", f"variable was not declared: {term.var.ident.value}", term.var.ident)
-            if found_vars[-1].size_w == "STR": # reading a str type
+            if found_vars[-1].size_w == "ARR": # reading a arr type
                 len_loc = found_vars[-1].loc
-                LEN_SIZE = "DWORD"
+                LEN_SIZE_W = "DWORD"
+                LEN_SIZE_B = 4
                 PTR_SIZE = "QWORD"
 
-                self.push_stack(f"{PTR_SIZE} [rbp - {len_loc - 4}]")
-                self.push_stack(f"{LEN_SIZE} [rbp - {len_loc}]")
+                self.push_stack(f"{PTR_SIZE} [rbp - {len_loc - LEN_SIZE_B}]")
+                self.push_stack(f"{LEN_SIZE_W} [rbp - {len_loc}]")
                 accum_size = self.stack_item_sizes.pop() + self.stack_item_sizes.pop()
                 accum_padding = self.stack_padding.pop() + self.stack_padding.pop()
                 self.stack_item_sizes.append(accum_size)
@@ -369,7 +371,7 @@ class Generator(ErrorHandler):
             for expr in term.var.exprs[::-1]:
                 self.gen_expression(expr)
                 size += self.stack_item_sizes.pop()
-                self.stack_padding.pop()
+                padding += self.stack_padding.pop()
             
             self.output.append(f"    lea rax, [rbp - {self.stack_size}]\n")
             self.push_stack("rax")
@@ -612,11 +614,11 @@ class Generator(ErrorHandler):
         elif decl_stmt.type_.type == tt.STR_DEF:
             self.output.append("    ;; --- string var declaration ---\n")
             self.gen_expression(decl_stmt.expr)
-            self.add_variable(decl_stmt, "STR", sum(self.stack_item_sizes[-1]))
+            self.add_variable(decl_stmt, "ARR", sum(self.stack_item_sizes[-1]))
         elif decl_stmt.type_.type == tt.ARRAY_TYPE:
             self.output.append("    ;; --- array var declaration ---\n")
             self.gen_expression(decl_stmt.expr)
-            self.add_variable(decl_stmt, "STR", sum(self.stack_item_sizes[-1]))
+            self.add_variable(decl_stmt, "ARR", sum(self.stack_item_sizes[-1]))
         else:
             raise ValueError("Unreachable")
         
